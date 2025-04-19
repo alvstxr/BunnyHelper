@@ -1,0 +1,4 @@
+rich
+pytz
+tzlocal
+plyer
