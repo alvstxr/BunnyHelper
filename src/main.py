@@ -26,6 +26,8 @@ BORDER_CHAR = "━"
 BORDER_ICON = "🐇"
 BORDER_STAR = "★"
 
+active_reminder = threading.Lock()
+
 os.makedirs(DATA_DIR, exist_ok=True) # imma assume this always works (it doesnt :pensive:) NVM IT DOES kinda?
 
 def clear_screen():
@@ -147,7 +149,15 @@ def reminder_thread(title, description, seconds):
             )
         except Exception as e:
             console.print(f"[red]Notification error:[/red] {e}")
-    threading.Thread(target=notify).start()
+        finally:
+            if active_reminder.locked():
+                active_reminder.release()
+
+    if active_reminder.locked():
+        console.print("[bold red]Please set 1 reminder at a time.[/bold red]")
+    else:
+        active_reminder.acquire()
+        threading.Thread(target=notify).start()
 
 
 #        (\_/)
@@ -235,11 +245,12 @@ def add_task(profile):
     save_profile(profile)
     console.print(f"[green]Added task:[/] {emoji} {title}")
 
-def list_tasks(profile): # FINALLY IT WORKS
+def list_tasks(profile): # should work now
     transition("Listing tasks")
     show_archived = Confirm.ask("Show archived tasks?", default=False)
     sort_by = Prompt.ask("Sort by", choices=["deadline", "priority", "status"], default="deadline")
     now = datetime.datetime.now(pytz.timezone(get_local_timezone()))
+
     def sort_key(task):
         if sort_by == "deadline":
             return (not task["deadline"], task["deadline"])
@@ -247,9 +258,18 @@ def list_tasks(profile): # FINALLY IT WORKS
             order = {"high": 0, "medium": 1, "low": 2}
             return order.get(task["priority"], 3)
         elif sort_by == "status":
-            return task["status"]
-        return task["title"]
+            return task.get("status", "")
+        return task.get("title", "")
+
+    any_displayed = False
+
     for group, tasks in profile["groups"].items():
+        filtered_tasks = [t for t in tasks if show_archived or t["status"] != "Archived"]
+        if not filtered_tasks:
+            continue
+
+        filtered_tasks = sorted(filtered_tasks, key=sort_key)
+
         table = Table(title=f"[cyan]{group}[/cyan] Tasks")
         table.add_column("ID")
         table.add_column("Title")
@@ -258,9 +278,8 @@ def list_tasks(profile): # FINALLY IT WORKS
         table.add_column("Deadline")
         table.add_column("Timezone")
         table.add_column("Description")
-        if t["status"] == "Archived" and not show_archived:
-            continue
-        for t in tasks:
+
+        for t in filtered_tasks:
             deadline_str = t["deadline"]
             overdue = False
             if deadline_str:
@@ -270,15 +289,19 @@ def list_tasks(profile): # FINALLY IT WORKS
                     dt = tz.localize(dt).astimezone(pytz.timezone(get_local_timezone()))
                     if dt < now:
                         overdue = True
-                        # toaster.show_toast("Overdue Task", f"{t['title']} is overdue!", duration=5) # should i comment this and make a plyer notif?
-                        notification.notify(title="Overdue Task", message=f"{t['title']} is overdue!", timeout=5) # the answer is yes
-
+                        notification.notify(title="Overdue Task", message=f"{t['title']} is overdue!", timeout=5)
                 except:
                     pass
             table.add_row(t["id"], t["emoji"] + " " + t["title"], t["priority"], t["status"], t["deadline"], t.get("timezone", ""), t.get("description", ""))
-        console.print(table)
-        tasks = sorted(tasks, key=sort_key)
 
+        console.print(table)
+        any_displayed = True
+
+    if not any_displayed:
+        console.print("[yellow]No tasks to display.[/yellow]")
+
+    console.print("\n[dim]Press Enter to return to the Tasks Menu...[/dim]")
+    input()
 
 def manage_task_status(task, profile):
     while True:
